@@ -5,8 +5,7 @@
   "main": "src/server/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "docker" : "docker run -p 6553:8080 -d --name socketlab -v /Users/jamieowen/Sync/socketlab/src:/socketlab/src socketlab",
-
+    "docker": "docker run -p 6553:8080 -d --name socketlab --link redis-server:redis -v /Users/jamieowen/Sync/socketlab/src:/socketlab/src socketlab",
     "start": "pm2 start src/server/index.js --no-daemon --name socketlab",
     "restart": "pm2 restart socketlab"
   },
@@ -14,7 +13,8 @@
   "license": "ISC",
   "dependencies": {
     "express": "^4.12.4",
-    "redis": "^0.12.1"
+    "redis": "^0.12.1",
+    "socket.io": "^1.3.5"
   },
   "devDependencies": {
     "gulp": "^3.8.11"
