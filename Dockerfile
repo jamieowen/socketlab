@@ -9,6 +9,6 @@ RUN npm install -g pm2
 
 EXPOSE 8080
 
-#CMD [ "pm2", "start", "socketlab/src/server/index.js", "--no-daemon", "--name", "socketlab" ]
+#CMD [ "pm2", "start", "socketlab/src/server.js", "--no-daemon", "--name", "socketlab" ]
 
 CMD [ "npm", "run", "start" ]

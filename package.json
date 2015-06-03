@@ -2,21 +2,27 @@
   "name": "socketlab",
   "version": "1.0.0",
   "description": "",
-  "main": "src/server/index.js",
+  "main": "src/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node tests/client-sockets.test | tap-colorize",
     "docker": "docker run -p 6553:8080 -d --name socketlab --link redis-server:redis -v /Users/jamieowen/Sync/socketlab/src:/socketlab/src socketlab",
-    "start": "pm2 start src/server/index.js --no-daemon --name socketlab",
+    "start": "pm2 start src/server.js --no-daemon --name socketlab",
     "restart": "pm2 restart socketlab"
   },
   "author": "Jamie Owen <hello@jamieowen.com> (=)",
   "license": "ISC",
   "dependencies": {
+    "events": "^1.0.2",
     "express": "^4.12.4",
+    "inherits": "^2.0.1",
     "redis": "^0.12.1",
-    "socket.io": "^1.3.5"
+    "socket.io": "^1.3.5",
+    "socket.io-client": "^1.3.5"
   },
   "devDependencies": {
-    "gulp": "^3.8.11"
+    "fakeredis": "^0.3.1",
+    "gulp": "^3.8.11",
+    "tap-colorize": "^1.2.0",
+    "tape": "^4.0.0"
   }
 }
