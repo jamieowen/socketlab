@@ -9,21 +9,28 @@ var LabsClient = function( url, opts )
 {
     EventEmitter.call( this );
 
+    // define io here to prevent access
+
     var io = SocketClient( url, opts );
+
     io.on( 'connect', function(){
 
         this.emit( LabsClient.CONNECT )
     }.bind(this) );
+
+    this._disconnect = function(){
+        io.disconnect();
+    }
 };
 
 
-var createClient = function( host, port )
+var createClient = function( url, opts )
 {
-    new LabsClient( host, port );
+    return new LabsClient( url, opts );
 };
 
 
-LabsClient.CONNECT = 'connect';
+LabsClient.CONNECT = 'labs-connected';
 LabsClient.START = 'session-start';
 LabsClient.END = 'session-end';
 
@@ -40,6 +47,8 @@ inherits( LabsClient, EventEmitter );
 
 
 LabsClient.prototype.message = function( str ){
+    // validate message
+
 
 };
 
@@ -48,7 +57,9 @@ LabsClient.prototype.point = function( x, y, z ){
 };
 
 LabsClient.prototype.disconnect = function(){
-
+    if( this._disconnect ){
+        this._disconnect();
+    }
 };
 
 
