@@ -1,36 +1,48 @@
 
-var socket = require( 'socket.io' );
+var socket      = require( 'socket.io' );
+var redis       = require( 'redis' );
+var socketRedis = require( 'socket.io-redis');
+var promise     = require( 'promise' );
+var events      = require( './events' );
 
-var SocketManager = function( server )
+var SocketManager = function( server, mongo, redisCache, redisPub, redisSub )
 {
     this.io = socket( server );
+
+    this.redisCache = redisCache;
+
+    this.mongo = mongo;
+
+    //this.io.adapter( socketRedis({ pubClient: redisPub, subClient: redisSub }) );
 
     this.io.on( 'connection', function( socket ){
 
         console.log( 'server - client connected' );
 
-        // events
+        var id = ( Math.random() * 10000 ).toFixed(2);
+        socket.on( events.CONNECT, function( projectId ){
 
-        // project-connect ->
-        // project-connected <-
-        // project-connect-error <-
+            // returns a session id - this will be passed
+            // back and forth - BUT not for production.
+            // use cookies for this.
 
-        // project-history-fetch ->
-        // project-history-fetched <-
-        // project-history-error <-
+            // could call this from redis cache first.
+            mongo.getProject( projectId )
+                .then( function( project ){
+                    var p = {
+                        id: id,
+                        name: 'project name',
+                        activeSessions: 1,
+                        totalSessions: 100
+                    };
+                    socket.emit( events.CONNECTED, p );
+                }, function( error ){
 
-        // project-message-send ->
-        // project-message-receive <-
-        // project-message-error <-
-
-        // project-point-send ->
-        // project-point-receive <-
-        // project-point-error <-
-
-        // project-disconnect ?
+                    socket.emit( events.CONNECT_ERROR, error );
+                });
 
 
-        socket.on( 'project-connect', function( data ){
+            console.log( '( server ) ', arguments.length, arguments );
 
             // check project exists ( mongo )
             // check calling client id & auth can access
@@ -101,9 +113,9 @@ var SocketManager = function( server )
 
 };
 
-var create = function( server ){
+var create = function( server, redisCache, redisPub, redisSub ){
 
-    var manager = new SocketManager( server );
+    var manager = new SocketManager( server, redisCache, redisPub, redisSub );
     return manager;
 
 };
@@ -117,3 +129,21 @@ SocketManager.prototype.close = function(){
 
     //this.io.disconnect();
 };
+
+SocketManager.prototype.onConnection = function(){
+
+};
+
+
+SocketManager.prototype.onHistoryEvent = function(){
+
+};
+
+SocketManager.prototype.onConnection = function(){
+
+};
+
+
+
+
+
