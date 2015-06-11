@@ -1,105 +1,166 @@
 
-var SocketClient = require( 'socket.io-client' );
+var SocketIOClient = require( 'socket.io-client' );
 var EventEmitter = require( 'events' );
 
 var inherits     = require( 'inherits' );
 var events       = require( './events' );
 
 
-var LabsClient = function( url, projectId, opts )
+var Client = function( url, projectID, opts )
 {
     EventEmitter.call( this );
 
-    if( projectId === undefined || isNaN( parseInt( projectId, 10 )) ){
+    if( projectID === undefined || isNaN( parseInt( projectID, 10 )) ){
         throw new Error( 'project id needs specifying to client.' );
     }
 
+    opts = opts || {};
+
+    this.projectID = projectID;
+
+    this.sessionIndex = null; // project session id ( not server session id )
+
+    this.connected = false;
+    this.started   = false;
+    this.starting  = false;
+
     var client = this;
+
     // define io here to prevent access
-    var io = SocketClient( url, opts );
+    var io = SocketIOClient( url, opts );
+    this._io = io;
 
     // event from socket.io connection
     io.on( 'connect', function(){
 
-        var count = 0;
-        io.on( LabsClient.CONNECTED, function(project){
-            count++;
-            console.log( count, 'Client fully connected', project );
+        io.on( events.SESSION_CONNECTED, function(project){
 
-            client.emit( LabsClient.CONNECTED );
+            io.removeAllListeners();
+
+            client.connected = true;
+            client.emit( Client.CONNECTED );
         });
 
-        io.on( LabsClient.CONNECT_ERROR, function(error){
-            console.log( 'Client connection error', error );
+        io.on( events.SESSION_CONNECT_ERROR, function(error){
 
-            client.emit( LabsClient.CONNECT_ERROR );
+            io.removeAllListeners();
+
+            client.connected = false;
+            client.emit( Client.ERROR );
         });
+
+        // TODO : Handle disconnect...
 
         // broadcast back to begin 'real' connection process ( with project id )
-        io.emit( LabsClient.CONNECT, projectId );
+        io.emit( events.SESSION_CONNECT, projectID );
 
     } );
 
-    this._disconnect = function(){
-        io.disconnect();
+};
+
+// Expose only the events needed for api.
+
+Client.ERROR = 'session-error';
+Client.CONNECTED = events.SESSION_CONNECTED;
+Client.STARTED = events.SESSION_STARTED;
+Client.ENDED = events.SESSION_ENDED;
+
+Client.ADDED = events.ADDED;
+Client.REMOVED = events.REMOVED;
+
+Client.MESSAGE = events.MESSAGE;
+Client.POINT = events.POINT;
+Client.CONFIG = events.CONFIG;
+
+
+module.exports = Client;
+inherits( Client, EventEmitter );
+
+
+Client.prototype.start = function(){
+
+    if( this.connected && !this.started && !this.starting ){
+
+        this.starting = true;
+
+        var io = this._io;
+        var client = this;
+
+        io.removeAllListeners();
+
+        io.on( events.SESSION_START_ERROR, function( error ){
+            throw new Error( 'Start Error' );
+        });
+
+        io.on( events.SESSION_STARTED, function( sessionIndex ){
+
+            this.starting = false;
+            this.started = true;
+
+            this.sessionIndex = sessionIndex;
+
+            io.removeAllListeners();
+
+            // listen for expected in-session events.
+
+            io.on( events.ADDED, function( sessionIndex, config ){
+                // will be called for
+                client.emit( Client.ADDED, sessionIndex, config );
+            });
+
+            io.on( events.REMOVED, function( sessionIndex ){
+
+                client.emit( Client.REMOVED, sessionIndex );
+            });
+
+            io.on( events.CONFIG, function( sessionIndex, config ){
+
+                client.emit( Client.CONFIG, sessionIndex, config );
+            });
+
+            io.on( events.POINT, function( sessionIndex, point ){
+
+                client.emit( Client.POINT, sessionIndex, point );
+            });
+
+            io.on( events.MESSAGE, function( sessionIndex, message ){
+                client.emit( Client.POINT, sessionIndex, message );
+            });
+
+            // allow client to begin session data capture.
+            this.emit( Client.STARTED, this.sessionIndex );
+
+        }.bind(this) );
+
+        // request to start session.
+        io.emit( events.SESSION_START );
+
     }
 };
 
+Client.prototype.end = function(){
+    // stub
 
-var createClient = function( url, projectId, opts )
-{
-    return new LabsClient( url, projectId, opts );
+    var io = this._io;
+
+    //io.emit( events.SESSION_END );
 };
 
-
-LabsClient.CONNECT = events.CONNECT;
-LabsClient.CONNECTED = events.CONNECTED;
-LabsClient.CONNECT_ERROR = events.CONNECT_ERROR;
-
-LabsClient.START = events.START;
-LabsClient.STARTED = events.STARTED;
-LabsClient.START_ERROR = events.START_ERROR;
-
-LabsClient.HISTORY_FETCH = events.HISTORY_FETCH;
-LabsClient.HISTORY_FETCHED = events.HISTORY_FETCHED;
-LabsClient.HISTORY_ERROR = events.HISTORY_ERROR;
-
-LabsClient.MESSAGE_SEND = events.MESSAGE_SEND;
-LabsClient.MESSAGE_SENT = events.MESSAGE_SENT;
-LabsClient.MESSAGE_ERROR = events.MESSAGE_ERROR;
-
-LabsClient.POINT_SEND = events.POINT_SEND;
-LabsClient.POINT_SENT = events.POINT_SENT;
-LabsClient.POINT_ERROR = events.POINT_ERROR;
-
-LabsClient.END = events.END;
-LabsClient.ENDED = events.ENDED;
-LabsClient.END_ERROR = events.END_ERROR;
-
-
-for( var key in LabsClient ){
-    createClient[key] = LabsClient[ key ];
-}
-
-
-module.exports = createClient;
-inherits( LabsClient, EventEmitter );
-
-
-LabsClient.prototype.message = function( str ){
-    // validate message
-
+Client.prototype.config = function( obj ){
 
 };
 
-LabsClient.prototype.point = function( x, y, z ){
-
+Client.prototype.message = function( str ){
+    // stub
 };
 
-LabsClient.prototype.disconnect = function(){
-    if( this._disconnect ){
-        this._disconnect();
-    }
+Client.prototype.point = function( x, y, z ){
+    // stub
+};
+
+Client.prototype.disconnect = function(){
+    this._io.disconnect();
+    this.connected = false;
 };
 
 

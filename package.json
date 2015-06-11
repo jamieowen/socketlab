@@ -12,8 +12,10 @@
   "author": "Jamie Owen <hello@jamieowen.com> (=)",
   "license": "ISC",
   "dependencies": {
+    "connect-redis": "^2.3.0",
     "events": "^1.0.2",
     "express": "^4.12.4",
+    "express-session": "^1.11.2",
     "inherits": "^2.0.1",
     "promise": "^7.0.1",
     "redis": "^0.12.1",

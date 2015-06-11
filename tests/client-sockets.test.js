@@ -7,7 +7,9 @@ var test        = require( 'tape' );
 
 var fakeRedis   = require( 'fakeredis' );
 var http        = require( 'http' );
-var server      = http.createServer();
+var express     = require( '../src/express' )();
+var server      = http.createServer( express.app );
+server.listen(0);
 
 // fake redis clients.
 var redisCache  = fakeRedis.createClient( 'cache' );
@@ -16,70 +18,153 @@ var redisSub    = fakeRedis.createClient( 'subscribe' );
 
 var mongo       = require( '../src/mock-mongo' )();
 
-var socketManager = require( '../src/sockets' )(server,mongo,redisCache,redisPub,redisSub);
+var socketManager = require( '../src/sockets' )(
+    server,
+    express.sessionMiddleware,
+    mongo,
+    redisCache,redisPub,redisSub);
 
-server.listen(0);
+
 /**
  Client side..
  */
 
-var LabsClient = require( '../src/client' );
+var Client = require( '../src/client' );
 
-var beforeTest = function( t, beginTest ){
+var beforeTest = function( t, opts, beginTest ){
 
     // create some fake lab clients.
-    console.log( 'setup test..' );
     t.comment( 'setting up clients..' );
 
-    var opts = {
+    opts = opts || {};
+
+    var numClients = opts.numClients || 2;
+
+    var socketOpts = {
         transports: ['websocket'],
         forceNew: true
     };
+
     var address = 'http://localhost:' +    server.address().port;
-    var projectId = 655321;
+    var projectId = '655321';
 
-    var client1 = LabsClient( address, projectId, opts );
-    var client2 = LabsClient( address, projectId, opts );
+    var clients = [];
+    var connected = 0;
 
-    client1.on( LabsClient.CONNECTED, function(){
+    var onClientConnected = function(){
+        connected++;
+        console.log( '(test setup) client ' + clients.indexOf(this) + ' connected.' );
 
-        t.comment( 'client 1 connected.' );
-        client2.on( LabsClient.CONNECTED, function(){
-
-            t.comment( 'client 2 connected.' );
-
-            console.log( 'begin test..' );
-            beginTest( [ client1, client2 ], function( endTest ){
-
+        if( connected >= numClients ){
+            beginTest( clients.slice(0), function( killServer ){
                 // After Test..
-                client1.disconnect();
-                client2.disconnect();
+                var client;
+                while( clients.length ){
+                    client = clients.pop();
+                    client.disconnect();
+                }
 
-                endTest();
+                if( killServer ){
+
+                    t.comment( 'finalise all tests - kill server ');
+                    socketManager.close();
+                    server.close();
+                }
             });
-        });
-    });
+        }
+    };
+
+    var onClientError = function(){
+        throw new Error( 'Unhandled error' );
+    };
+
+    var client;
+    for( var i = 0; i<numClients; i++ ){
+        client = new Client( address, projectId, socketOpts );
+        clients.push( client );
+        client.on( Client.CONNECTED, onClientConnected.bind(client) );
+        client.on( Client.ERROR, onClientError.bind(client) );
+    }
 
 };
 
 test( 'test basic connection', function(t){
 
-    beforeTest( t, function( clients, afterTest ){
+    beforeTest( t, { numClients: 2 }, function( clients, done ){
 
-        t.comment( 'during test..' );
+        var client1 = clients[0];
+        var client2 = clients[1];
 
-        afterTest( function(){
+        t.equals( client1.connected, true, 'client 1 connected' );
+        t.equals( client2.connected, true, 'client 2 connected' );
 
-            t.comment( 'finalise test - close server ');
+        done( false );
 
-            socketManager.close();
-            server.close();
+        t.equals( client1.connected, false, 'client 1 disconnected' );
+        t.equals( client2.connected, false, 'client 2 disconnected' );
 
-            console.log( 'close' );
-            t.end();
-
-        })
+        t.end();
     });
 
 } );
 
+
+test( 'test start/end session events', function(t){
+
+    beforeTest( t, { numClients: 2 }, function( clients, done ){
+
+        var client1 = clients[0];
+        var client2 = clients[1];
+
+        var clientsStarted = clients.slice(0);
+
+        var clientStarted = function(){
+            clientsStarted.pop();
+            if( clientsStarted.length === 0 ){
+                endClients();
+            }
+        };
+
+        client1.on( Client.STARTED, function( sessionIndex ){
+            t.equals( client1.started, true, 'Test client1 started.' );
+            clientStarted();
+        } );
+
+        client2.on( Client.STARTED, function( sessionIndex ){
+            t.equals( client2.started, true, 'Test client2 started.' );
+            clientStarted();
+        });
+
+        client1.start();
+        client2.start();
+
+        var clientsEnded = clients.slice(0);
+
+        var clientEnded = function(){
+            clientsEnded.pop();
+            if( clientsEnded.length === 0 ){
+                done( true );
+                t.end();
+            }
+        };
+
+        var endClients = function(){
+
+            client1.on( Client.ENDED, function( sessionIndex ){
+                t.equals( client1.started, false, 'Test client1 ended.' );
+                clientEnded();
+            } );
+
+            client2.on( Client.ENDED, function( sessionIndex ){
+                t.equals( client2.started, false, 'Test client2 ended.' );
+                clientEnded();
+            });
+
+            client1.end();
+            client2.end();
+
+        }
+
+    });
+
+} );

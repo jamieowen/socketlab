@@ -5,106 +5,228 @@ var socketRedis = require( 'socket.io-redis');
 var promise     = require( 'promise' );
 var events      = require( './events' );
 
-var SocketManager = function( server, mongo, redisCache, redisPub, redisSub )
+var SocketManager = function(
+    server,
+    sessionMiddleware,
+    mongo,
+    redis,
+    redisPub,
+    redisSub )
 {
+
+    this.redis = redis;
+    this.mongo = mongo;
+
     this.io = socket( server );
 
-    this.redisCache = redisCache;
-
-    this.mongo = mongo;
+    this.io.use(function(socket, next){
+        sessionMiddleware(socket.request, {}, next);
+    });
 
     //this.io.adapter( socketRedis({ pubClient: redisPub, subClient: redisSub }) );
 
     this.io.on( 'connection', function( socket ){
 
-        console.log( 'server - client connected' );
+        var serverSessionID = socket.request.sessionID;
 
-        var id = ( Math.random() * 10000 ).toFixed(2);
-        socket.on( events.CONNECT, function( projectId ){
+        console.log( '(server) client connected', serverSessionID );
 
-            // returns a session id - this will be passed
-            // back and forth - BUT not for production.
-            // use cookies for this.
+        // -----------
+        // DISCONNECT
 
-            // could call this from redis cache first.
-            mongo.getProject( projectId )
-                .then( function( project ){
-                    var p = {
-                        id: id,
-                        name: 'project name',
-                        activeSessions: 1,
-                        totalSessions: 100
-                    };
-                    socket.emit( events.CONNECTED, p );
-                }, function( error ){
+        // > Handle disconnect first - this is important to clear cache.
 
-                    socket.emit( events.CONNECT_ERROR, error );
-                });
+        socket.on( 'disconnect', function(){
 
+            // > Fetch the redis data associated with the disconnecting serverSession id.
+            redis.get( 'server-session:projectID:' + serverSessionID, function( err, projectID ){
 
-            console.log( '( server ) ', arguments.length, arguments );
+                // delete the session key
+                redis.del( 'server-session:projectID:' + serverSessionID );
+                // todo: we would also save any session data to mongo here?
+                // todo: or do we wait for all connections to close? ( poss depends on history size )
 
-            // check project exists ( mongo )
-            // check calling client id & auth can access
-            // check project active ( redis )
+                if( projectID ){
 
-            // set/get project active and increment active sessions
-            // active sessions can not be greater than the history size.
+                    // > Decrement connection count.
+                    redis.decr( 'project:numConnections:' + projectID, function( err, numConnections ){
 
-            // project entry with next session index data needs to exist.
-            // check redis or fetch from mongo.
+                        if( numConnections === 0 ){
 
-            // pop/unshift new project session index. & clear existing session data?
+                            // > Clear up cache if this is the last remaining project session.
+                            redis.multi()
+                                .del( 'project:numConnections:' + projectID )
+                                .del( 'project:data-hash:' + projectID )
+                                .del( 'project:sessionIndex:' + projectID ) // need to save this to lastSessionIndex
 
-            // notify back to client with success
-            // project-connected
+                                // delete other keys...
+                                .exec( function( err, res ){
 
-            // obj.projectId
-            // obj.sessionId ( reused )
-            // obj.activeSessions =
-            // obj.totalSessions = will usually be max unless just started
-            // obj.sessionStartTime
-            // ** define. some session averages - size(in transfer bytes), time, etc.
+                                    if( res[0] === 0 ){
+                                        console.log( 'problem deleting keys' );
+                                    }else{
+                                        console.log( 'Last project session (' + projectID + ') : Cleaning up project data.' );
+                                    }
+
+                                    redis.keys( '*', function( err, res ){
+                                        console.log( 'REMAINING KEYS:', res );
+                                    } );
+
+                                });
+                        }else
+                        if( err ){
+
+                            // error should not happen here.
+                            // - probably should log it.
+                            console.log( 'Disconnect : Error...' );
+                        }
+
+                    } );
+                }else{
+                    // most likely no project id - do nothing
+                }
+            })
+
+        });
+
+        // -----------
+        // CONNECT
+
+        socket.on( events.SESSION_CONNECT, function( projectID ){
+
+            var onConnectError = function( error ){
+                socket.emit( events.SESSION_CONNECT_ERROR, error );
+            };
+
+            if( !projectID || typeof projectID !== 'string' ){
+                onConnectError( 'Not a valid projectID.' );
+                return;
+            }
+
+            // > Query mongo and check if project exists.
+            // todo : This could be speedier by caching project ids in redis.
+
+            mongo.getProject( projectID ).then( function( project ){
+
+                // > Project exists so :
+                // Map session id to project id.
+                // Increment the project session/active sessions.
+                // Store necessary project data.
+                // Emit CONNECTED event back to client.
+
+                redis.multi()
+                    .incr( 'project:numConnections:' + projectID )
+                    .set( 'server-session:projectID:' + serverSessionID, projectID )
+                    //.hset( 'project-session:hash:' + pSessionID, projectID )
+                    .exec( function( err, res ){
+
+                        if( res ){
+
+                            var numConnections = res[0];
+                            project.connectionOrder = numConnections; // debug
+
+                            if( numConnections === 1 ){
+
+                                // > First session on project - cache project data
+                                redis.hmset( 'project:data-hash:' + projectID, {
+                                        'lastSessionIndex': project.lastSessionIndex,
+                                        'maxSessionHistory': project.maxSessionHistory },
+                                    function( err, res ){
+                                        if( res ){
+                                            project.firstSession = true;
+                                            socket.emit( events.SESSION_CONNECTED, project );
+                                        }else{
+                                            onConnectError( 'Problem initialising first session.' );
+                                        }
+                                    }
+                                );
+
+                            }else{
+                                // > Otherwise we don't need anything until start event.
+                                socket.emit( events.SESSION_CONNECTED, project );
+                                // todo: emit an 'info' object for session count?
+                            }
+
+                        }else{
+                            onConnectError( 'Problem activating session.' );
+                        }
+                    });
+
+            }, function(error){
+                onConnectError( 'Problem fetching project from db : ' + error );
+            } );
 
         } );
 
-        socket.on( 'project-history-fetch', function(){
 
-            // if not data, get project data & session data ( mongo -> redis )
-            // ( would need to set a 'fetch' status when getting data )
-            // and use redis pub subs to tell other clients data has arrived
-            // if others are requesting data.
+        // -----------
+        // START SESSION
 
-            // socket.emit( 'project-history-fetched' );
-            // socket.emit( 'project-history-error' );
+        socket.on( events.SESSION_START, function(){
+
+            console.log( '(server) session start ', serverSessionID );
+
+            var onSessionStartError = function( error ){
+                socket.emit( events.SESSION_START_ERROR, error );
+            };
+
+            // TODO : This is probably not needed - we could store the validated projectID
+            // TODO: in the scope of this socket connection. As this is not a http request.
+            redis.get( 'server-session:projectID:' + serverSessionID, function( err, projectID ){
+
+                if( projectID ){
+
+                    // > Fetch available index.
+                    redis.multi()
+                        .hgetall( 'project:data-hash:' + projectID )
+                        .incr( 'project:sessionIndex:' + projectID )
+                        .exec( function( err, res ){
+
+                            if( res ){
+                                var projectData = res[0];
+                                var maxSessionHistory = parseInt( projectData['maxSessionHistory'] );
+                                var sessionIndex = res[1] % maxSessionHistory;
+
+                                console.log( 'session index : ', sessionIndex );
+                                console.log( 'session in %  : ', maxSessionHistory );
+
+                                socket.emit( events.SESSION_STARTED, sessionIndex );
+
+                            }else{
+                                onSessionStartError( 'Couldnt find project' );
+                            }
+
+                        })
+
+                }else{
+                    onSessionStartError( 'No project mapped to serverSessionID' );
+                }
+
+            })
         });
 
-        socket.on( 'project-message-send', function(){
 
-            // socket.emit( 'project-message-error' ); < sent back only to calling socket
+        // -----------
+        // SEND MESSAGE
 
-            // socket.emit( 'project-message-receive' ); < sent to all sockets in this project room
-            // -sessionId
-            // -message
-            // -time
 
+        // -----------
+        // END SESSION
+
+        socket.on( events.SESSION_END, function(){
+
+            console.log( 'SESSION END' );
+
+            socket.emit( events.SESSION_ENDED );
         });
 
-        socket.on( 'project-point-send', function(){
 
-            // socket.emit( 'project-point-error' ); < sent back only to calling socket
+        // -----------
+        // HISTORY
 
-            // socket.emit( 'project-point-receive' ); < sent to all sockets in this project room
-            // -sessionId
-            // -point
-            // -time
+        socket.on( events.HISTORY_FETCH, function(){
 
         });
-
-        socket.on( 'disconnect', function( ){
-            // disconnect client
-
-        })
 
 
 
@@ -124,26 +246,9 @@ module.exports = create;
 
 SocketManager.prototype = {};
 
-
 SocketManager.prototype.close = function(){
 
     //this.io.disconnect();
 };
-
-SocketManager.prototype.onConnection = function(){
-
-};
-
-
-SocketManager.prototype.onHistoryEvent = function(){
-
-};
-
-SocketManager.prototype.onConnection = function(){
-
-};
-
-
-
 
 
